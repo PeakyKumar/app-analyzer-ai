@@ -299,7 +299,7 @@ function computeRatingDistribution(
 }
 
 export const analyzeReviews = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => InputSchema.parse(input))
+  .validator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }): Promise<AnalysisResult> => {
     const packageId = extractPackageId(data.url);
     if (!packageId) {

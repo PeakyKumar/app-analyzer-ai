@@ -369,173 +369,173 @@ async function analyzeApp(
     result: { painPoints, ratingDistribution, topKeywords, limitedReviews },
     geo_themes: geoThemes,
     geo_signal_counts: geoSignalCounts,
-      created_at: now,
-    });
+    created_at: now,
+  });
 
-    return {
-      packageId,
-      appTitle,
-      reviewsCount: reviews.length,
-      painPoints,
-      geoThemes,
-      ratingDistribution,
-      topKeywords,
-      geoSignalCounts,
-      availabilityMentions,
-      availabilityPercentage: reviews.length > 0 ? Math.round((availabilityMentions / reviews.length) * 100) : 0,
-      limitedReviews,
-      cached: false,
-      cachedAt: now,
+  return {
+    packageId,
+    appTitle,
+    reviewsCount: reviews.length,
+    painPoints,
+    geoThemes,
+    ratingDistribution,
+    topKeywords,
+    geoSignalCounts,
+    availabilityMentions,
+    availabilityPercentage: reviews.length > 0 ? Math.round((availabilityMentions / reviews.length) * 100) : 0,
+    limitedReviews,
+    cached: false,
+    cachedAt: now,
+  };
+}
+
+function generateComparisonInsights(apps: AppAnalysisSummary[]): ComparisonResult["availabilityGap"]["insights"] {
+  const insights: string[] = [];
+  const sorted = [...apps].sort((a, b) => b.availabilityPercentage - a.availabilityPercentage);
+
+  if (sorted.length >= 2) {
+    const gap = sorted[0].availabilityPercentage - sorted[sorted.length - 1].availabilityPercentage;
+    if (gap > 5) {
+      insights.push(`${sorted[0].appTitle ?? sorted[0].packageId} has ${gap}% more availability-related complaints than ${sorted[sorted.length - 1].appTitle ?? sorted[sorted.length - 1].packageId}.`);
+    }
+  }
+
+  const avgAvailability = apps.reduce((sum, a) => sum + a.availabilityPercentage, 0) / apps.length;
+  if (avgAvailability > 10) {
+    insights.push(`Average availability-related complaints across apps: ${avgAvailability.toFixed(1)}%.`);
+  }
+
+  return insights;
+}
+
+function generateGeoSignalInsights(apps: AppAnalysisSummary[]): ComparisonResult["geoSignalComparison"]["insights"] {
+  const insights: string[] = [];
+
+  const sorted = [...apps].sort((a, b) => {
+    const aPct = a.reviewsCount > 0 ? (a.geoSignalCounts.non_metro_mentioned / a.reviewsCount) * 100 : 0;
+    const bPct = b.reviewsCount > 0 ? (b.geoSignalCounts.non_metro_mentioned / b.reviewsCount) * 100 : 0;
+    return bPct - aPct;
+  });
+
+  if (sorted.length >= 2 && sorted[0].reviewsCount > 0) {
+    const topPct = (sorted[0].geoSignalCounts.non_metro_mentioned / sorted[0].reviewsCount) * 100;
+    if (topPct > 5) {
+      insights.push(`${sorted[0].appTitle ?? sorted[0].packageId} shows highest non-metro signal at ${topPct.toFixed(1)}%.`);
+    }
+  }
+
+  return insights;
+}
+
+function generateThemeInsights(apps: AppAnalysisSummary[]): ComparisonResult["themeComparison"]["insights"] {
+  const insights: string[] = [];
+
+  // Find common themes across apps
+  const themeMap = new Map<string, { packageId: string; mentions: number; percentage: number }[]>();
+  for (const app of apps) {
+    const allThemes = [...app.painPoints, ...app.geoThemes];
+    for (const theme of allThemes) {
+      const key = theme.theme.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+      const existing = themeMap.get(key) ?? [];
+      existing.push({ packageId: app.packageId, mentions: theme.mentions, percentage: theme.percentage });
+      themeMap.set(key, existing);
+    }
+  }
+
+  const commonThemes = [...themeMap.entries()]
+    .filter(([, apps]) => apps.length >= 2)
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 3);
+
+  for (const [themeKey, themeApps] of commonThemes) {
+    const appNames = themeApps.map((a) => apps.find((app) => app.packageId === a.packageId)?.appTitle ?? a.packageId).join(", ");
+    insights.push(`"${themeKey}" appears in ${themeApps.length} app(s): ${appNames}.`);
+  }
+
+  return insights;
+}
+
+export const compareApps = createServerFn({ method: "POST" })
+  .validator((input: unknown) => CompareInputSchema.parse(input))
+  .handler(async ({ data }): Promise<ComparisonResult> => {
+    const apps = await Promise.all(
+      data.packageIds.map((id) => analyzeApp(id, data.hypothesis)),
+    );
+
+    const availabilityGap: ComparisonResult["availabilityGap"] = {
+      worstApp: null,
+      bestApp: null,
+      insights: generateComparisonInsights(apps),
     };
-  }
 
-  function generateComparisonInsights(apps: AppAnalysisSummary[]): ComparisonResult["availabilityGap"]["insights"] {
-    const insights: string[] = [];
-    const sorted = [...apps].sort((a, b) => b.availabilityPercentage - a.availabilityPercentage);
+    const sortedByAvailability = [...apps].sort((a, b) => b.availabilityPercentage - a.availabilityPercentage);
+    availabilityGap.worstApp = {
+      packageId: sortedByAvailability[0].packageId,
+      percentage: sortedByAvailability[0].availabilityPercentage,
+    };
+    availabilityGap.bestApp = {
+      packageId: sortedByAvailability[sortedByAvailability.length - 1].packageId,
+      percentage: sortedByAvailability[sortedByAvailability.length - 1].availabilityPercentage,
+    };
 
-    if (sorted.length >= 2) {
-      const gap = sorted[0].availabilityPercentage - sorted[sorted.length - 1].availabilityPercentage;
-      if (gap > 5) {
-        insights.push(`${sorted[0].appTitle ?? sorted[0].packageId} has ${gap}% more availability-related complaints than ${sorted[sorted.length - 1].appTitle ?? sorted[sorted.length - 1].packageId}.`);
-      }
-    }
+    const geoSignalComparison: ComparisonResult["geoSignalComparison"] = {
+      packages: apps.map((a) => ({
+        packageId: a.packageId,
+        nonMetroPercentage: a.reviewsCount > 0
+          ? (a.geoSignalCounts.non_metro_mentioned / a.reviewsCount) * 100
+          : 0,
+      })),
+      insights: generateGeoSignalInsights(apps),
+    };
 
-    const avgAvailability = apps.reduce((sum, a) => sum + a.availabilityPercentage, 0) / apps.length;
-    if (avgAvailability > 10) {
-      insights.push(`Average availability-related complaints across apps: ${avgAvailability.toFixed(1)}%.`);
-    }
-
-    return insights;
-  }
-
-  function generateGeoSignalInsights(apps: AppAnalysisSummary[]): ComparisonResult["geoSignalComparison"]["insights"] {
-    const insights: string[] = [];
-
-    const sorted = [...apps].sort((a, b) => {
-      const aPct = a.reviewsCount > 0 ? (a.geoSignalCounts.non_metro_mentioned / a.reviewsCount) * 100 : 0;
-      const bPct = b.reviewsCount > 0 ? (b.geoSignalCounts.non_metro_mentioned / b.reviewsCount) * 100 : 0;
-      return bPct - aPct;
-    });
-
-    if (sorted.length >= 2 && sorted[0].reviewsCount > 0) {
-      const topPct = (sorted[0].geoSignalCounts.non_metro_mentioned / sorted[0].reviewsCount) * 100;
-      if (topPct > 5) {
-        insights.push(`${sorted[0].appTitle ?? sorted[0].packageId} shows highest non-metro signal at ${topPct.toFixed(1)}%.`);
-      }
-    }
-
-    return insights;
-  }
-
-  function generateThemeInsights(apps: AppAnalysisSummary[]): ComparisonResult["themeComparison"]["insights"] {
-    const insights: string[] = [];
-
-    // Find common themes across apps
+    // Build theme comparison
     const themeMap = new Map<string, { packageId: string; mentions: number; percentage: number }[]>();
     for (const app of apps) {
-      const allThemes = [...app.painPoints, ...app.geoThemes];
-      for (const theme of allThemes) {
-        const key = theme.theme.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+      for (const theme of [...app.painPoints, ...app.geoThemes]) {
+        const key = theme.theme.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
         const existing = themeMap.get(key) ?? [];
         existing.push({ packageId: app.packageId, mentions: theme.mentions, percentage: theme.percentage });
         themeMap.set(key, existing);
       }
     }
 
-    const commonThemes = [...themeMap.entries()]
-      .filter(([, apps]) => apps.length >= 2)
-      .sort((a, b) => b[1].length - a[1].length)
-      .slice(0, 3);
+  const themeComparison: ComparisonResult["themeComparison"] = {
+    themes: [...themeMap.entries()]
+      .map(([name, appsData]) => ({
+        name: name,
+        apps: appsData,
+      }))
+      .filter((t) => t.apps.length >= 1)
+      .slice(0, 10),
+    insights: generateThemeInsights(apps),
+  };
 
-    for (const [themeKey, themeApps] of commonThemes) {
-      const appNames = themeApps.map((a) => apps.find((app) => app.packageId === a.packageId)?.appTitle ?? a.packageId).join(", ");
-      insights.push(`"${themeKey}" appears in ${themeApps.length} app(s): ${appNames}.`);
-    }
+  const limitations: string[] = [
+    "This analysis uses text-based proxies for geography, not verified location data. Results are directional, not definitive.",
+    "City/state metadata is not available in Play Store review data — signals are inferred from review text patterns.",
+    "Hindi/Hinglish language patterns are used as a rough proxy for non-metro users, which is not definitive.",
+    "Reviews are a sample of user sentiment and may not represent the full user base.",
+    "Cached results may be up to 24 hours old.",
+  ];
 
-    return insights;
-  }
+  const now = new Date().toISOString();
 
-  export const compareApps = createServerFn({ method: "POST" })
-    .inputValidator((input: unknown) => CompareInputSchema.parse(input))
-    .handler(async ({ data }): Promise<ComparisonResult> => {
-      const apps = await Promise.all(
-        data.packageIds.map((id) => analyzeApp(id, data.hypothesis)),
-      );
+  return {
+    apps,
+    comparisonDate: now,
+    hypothesis: data.hypothesis,
+    availabilityGap,
+    geoSignalComparison,
+    themeComparison,
+    limitations,
+  };
+});
 
-      const availabilityGap: ComparisonResult["availabilityGap"] = {
-        worstApp: null,
-        bestApp: null,
-        insights: generateComparisonInsights(apps),
-      };
-
-      const sortedByAvailability = [...apps].sort((a, b) => b.availabilityPercentage - a.availabilityPercentage);
-      availabilityGap.worstApp = {
-        packageId: sortedByAvailability[0].packageId,
-        percentage: sortedByAvailability[0].availabilityPercentage,
-      };
-      availabilityGap.bestApp = {
-        packageId: sortedByAvailability[sortedByAvailability.length - 1].packageId,
-        percentage: sortedByAvailability[sortedByAvailability.length - 1].availabilityPercentage,
-      };
-
-      const geoSignalComparison: ComparisonResult["geoSignalComparison"] = {
-        packages: apps.map((a) => ({
-          packageId: a.packageId,
-          nonMetroPercentage: a.reviewsCount > 0
-            ? (a.geoSignalCounts.non_metro_mentioned / a.reviewsCount) * 100
-            : 0,
-        })),
-        insights: generateGeoSignalInsights(apps),
-      };
-
-      // Build theme comparison
-      const themeMap = new Map<string, { packageId: string; mentions: number; percentage: number }[]>();
-      for (const app of apps) {
-        for (const theme of [...app.painPoints, ...app.geoThemes]) {
-          const key = theme.theme.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
-          const existing = themeMap.get(key) ?? [];
-          existing.push({ packageId: app.packageId, mentions: theme.mentions, percentage: theme.percentage });
-          themeMap.set(key, existing);
-        }
-      }
-
-      const themeComparison: ComparisonResult["themeComparison"] = {
-        themes: [...themeMap.entries()]
-          .map(([name, appsData]) => ({
-            name: name,
-            apps: appsData,
-          }))
-          .filter((t) => t.apps.length >= 1)
-          .slice(0, 10),
-        insights: generateThemeInsights(apps),
-      };
-
-      const limitations: string[] = [
-        "This analysis uses text-based proxies for geography, not verified location data. Results are directional, not definitive.",
-        "City/state metadata is not available in Play Store review data — signals are inferred from review text patterns.",
-        "Hindi/Hinglish language patterns are used as a rough proxy for non-metro users, which is not definitive.",
-        "Reviews are a sample of user sentiment and may not represent the full user base.",
-        "Cached results may be up to 24 hours old.",
-      ];
-
-      const now = new Date().toISOString();
-
-      return {
-        apps,
-        comparisonDate: now,
-        hypothesis: data.hypothesis,
-        availabilityGap,
-        geoSignalComparison,
-        themeComparison,
-        limitations,
-      };
-    });
-
-  export const analyzeSingleAppWithGeo = createServerFn({ method: "POST" })
-    .inputValidator((input: unknown) => CompareInputSchema.parse(input))
-    .handler(async ({ data }) => {
-      const results = await Promise.all(
-        data.packageIds.slice(0, 1).map((id) => analyzeApp(id, data.hypothesis)),
-      );
-      return results[0] ?? null;
-    });
+export const analyzeSingleAppWithGeo = createServerFn({ method: "POST" })
+  .validator((input: unknown) => CompareInputSchema.parse(input))
+  .handler(async ({ data }) => {
+    const results = await Promise.all(
+      data.packageIds.slice(0, 1).map((id) => analyzeApp(id, data.hypothesis)),
+    );
+    return results[0] ?? null;
+  });
