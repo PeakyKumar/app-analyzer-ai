@@ -9,8 +9,17 @@ export type PainPoint = {
   theme: string;
   summary: string;
   mentions: number;
-  confidence: "high" | "medium" | "low";
+  percentage: number;
+  confidence: "high" | "low";
   quotes: string[];
+};
+
+export type RatingDistribution = {
+  "5": number;
+  "4": number;
+  "3": number;
+  "2": number;
+  "1": number;
 };
 
 export type AnalysisResult = {
@@ -18,13 +27,15 @@ export type AnalysisResult = {
   appTitle: string | null;
   reviewsCount: number;
   painPoints: PainPoint[];
+  ratingDistribution: RatingDistribution;
+  topKeywords: string[];
+  limitedReviews: boolean;
   cached: boolean;
   cachedAt: string;
 };
 
 function extractPackageId(input: string): string | null {
   const trimmed = input.trim();
-  // Accept raw package IDs like com.example.app
   if (/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(trimmed)) {
     return trimmed;
   }
@@ -41,8 +52,41 @@ function extractPackageId(input: string): string | null {
 
 async function fetchPlayStoreReviews(
   packageId: string,
-  count = 120,
-): Promise<{ appTitle: string | null; reviews: { rating: number; text: string }[] }> {
+  count = 150,
+): Promise<{
+  appTitle: string | null;
+  reviews: { rating: number; text: string }[];
+  appExists: boolean;
+}> {
+  // Check app existence via details page first
+  let appTitle: string | null = null;
+  let appExists = false;
+  try {
+    const titleRes = await fetch(
+      `https://play.google.com/store/apps/details?id=${encodeURIComponent(packageId)}&hl=en&gl=us`,
+      {
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      },
+    );
+    if (titleRes.ok) {
+      appExists = true;
+      const html = await titleRes.text();
+      const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      if (m) appTitle = m[1].replace(/\s*-\s*Apps on Google Play\s*$/i, "").trim();
+    } else if (titleRes.status === 404) {
+      appExists = false;
+    }
+  } catch {
+    // ignore
+  }
+
+  if (!appExists) {
+    return { appTitle, reviews: [], appExists: false };
+  }
+
   const payload =
     "f.req=" +
     encodeURIComponent(
@@ -87,55 +131,40 @@ async function fetchPlayStoreReviews(
 
   const innerStr = (outer as unknown[])?.[0] as unknown[] | undefined;
   const rpcBody = innerStr?.[2] as string | null | undefined;
-  if (!rpcBody) {
-    throw new Error("No reviews returned. Is the app ID correct?");
-  }
-  const inner = JSON.parse(rpcBody) as unknown[];
-  const rawReviews = (inner?.[0] ?? []) as unknown[];
-
   const reviews: { rating: number; text: string }[] = [];
-  for (const r of rawReviews) {
-    if (!Array.isArray(r)) continue;
-    const rating = typeof r[2] === "number" ? r[2] : 0;
-    const rawText = r[4];
-    const reviewText = typeof rawText === "string" ? rawText.trim() : "";
-    if (!reviewText) continue;
-    reviews.push({ rating, text: reviewText });
-  }
-
-  // Fetch app title (best effort)
-  let appTitle: string | null = null;
-  try {
-    const titleRes = await fetch(
-      `https://play.google.com/store/apps/details?id=${encodeURIComponent(packageId)}&hl=en&gl=us`,
-      {
-        headers: {
-          "user-agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        },
-      },
-    );
-    if (titleRes.ok) {
-      const html = await titleRes.text();
-      const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      if (m) appTitle = m[1].replace(/\s*-\s*Apps on Google Play\s*$/i, "").trim();
+  if (rpcBody) {
+    const inner = JSON.parse(rpcBody) as unknown[];
+    const rawReviews = (inner?.[0] ?? []) as unknown[];
+    for (const r of rawReviews) {
+      if (!Array.isArray(r)) continue;
+      const rating = typeof r[2] === "number" ? r[2] : 0;
+      const rawText = r[4];
+      const reviewText = typeof rawText === "string" ? rawText.trim() : "";
+      if (!reviewText) continue;
+      reviews.push({ rating, text: reviewText });
     }
-  } catch {
-    // ignore
   }
 
-  return { appTitle, reviews };
+  return { appTitle, reviews, appExists: true };
 }
 
-async function clusterWithAI(
+type LlmTheme = { name: string; count: number; quotes: string[]; summary?: string };
+type LlmResponse = { themes: LlmTheme[]; top_keywords: string[] };
+
+async function callClusteringLLM(
   reviews: { rating: number; text: string }[],
-): Promise<PainPoint[]> {
+): Promise<LlmResponse> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) throw new Error("Missing LOVABLE_API_KEY");
 
-  // Focus on lower-rated + negative sentiment reviews for pain points
   const negative = reviews
-    .filter((r) => r.rating <= 3 || /bug|crash|slow|broken|hate|worst|terrible|awful|annoying|freeze|lag|glitch|problem|issue|doesn'?t work|stopped/i.test(r.text))
+    .filter(
+      (r) =>
+        r.rating <= 3 ||
+        /bug|crash|slow|broken|hate|worst|terrible|awful|annoying|freeze|lag|glitch|problem|issue|doesn'?t work|stopped/i.test(
+          r.text,
+        ),
+    )
     .slice(0, 120);
   const source = negative.length >= 15 ? negative : reviews.slice(0, 120);
 
@@ -143,7 +172,10 @@ async function clusterWithAI(
     .map((r, i) => `#${i + 1} (${r.rating}★) ${r.text.replace(/\s+/g, " ").slice(0, 500)}`)
     .join("\n");
 
-  const systemPrompt = `You are a senior product analyst. Given user reviews for a mobile app, identify the top user pain points. Cluster related complaints into specific, actionable themes (NOT vague labels like "UX issues"). For each theme provide: a short specific theme name, a one-sentence summary, mention count (# of reviews clearly about this theme), confidence (high/medium/low based on mention count and specificity), and 2-3 short verbatim quotes. Return ONLY valid JSON with shape: {"painPoints":[{"theme":string,"summary":string,"mentions":number,"confidence":"high"|"medium"|"low","quotes":string[]}]}. Order by mentions desc. Return 4-8 pain points.`;
+  const systemPrompt = `You are a senior product analyst. Given user reviews for a mobile app:
+1. Identify pain-point themes. Cluster related complaints into SPECIFIC, actionable themes (not vague labels like "UX issues"). For each theme return: name (short), count (# of reviews clearly about this theme), summary (one sentence), and 2-3 short verbatim quotes.
+2. Extract top_keywords: 8-12 meaningful, specific words/short phrases most frequent across reviews. EXCLUDE stopwords (a, the, is, and, this, that) and generic low-signal review words (app, good, nice, please, money, use, using, time). PREFER specific issue words (delay, support, chatbot, settlement, cashback, refund, crash, slow, bug). Skip words under 4 chars unless clearly meaningful like "bug".
+Return ONLY valid JSON: {"themes":[{"name":string,"count":number,"summary":string,"quotes":string[]}],"top_keywords":string[]}. Order themes by count desc. Return 4-8 themes.`;
 
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -162,7 +194,8 @@ async function clusterWithAI(
   });
 
   if (res.status === 429) throw new Error("AI rate limit exceeded. Please try again in a moment.");
-  if (res.status === 402) throw new Error("AI credits exhausted. Please add credits to your workspace.");
+  if (res.status === 402)
+    throw new Error("AI credits exhausted. Please add credits to your workspace.");
   if (!res.ok) {
     const errTxt = await res.text().catch(() => "");
     throw new Error(`AI request failed (${res.status}): ${errTxt.slice(0, 200)}`);
@@ -170,24 +203,99 @@ async function clusterWithAI(
 
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const content = data.choices?.[0]?.message?.content ?? "{}";
-  let parsed: { painPoints?: PainPoint[] };
+  const parsed = JSON.parse(content) as {
+    themes?: LlmTheme[];
+    top_keywords?: string[];
+  };
+  const themes = Array.isArray(parsed.themes) ? parsed.themes : [];
+  const top_keywords = Array.isArray(parsed.top_keywords) ? parsed.top_keywords : [];
+  return { themes, top_keywords };
+}
+
+async function clusterWithAI(
+  reviews: { rating: number; text: string }[],
+): Promise<LlmResponse> {
   try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error("AI returned invalid JSON");
+    return await callClusteringLLM(reviews);
+  } catch (e) {
+    // Retry once
+    try {
+      return await callClusteringLLM(reviews);
+    } catch {
+      throw e instanceof Error ? e : new Error("Analysis failed");
+    }
   }
-  const points = Array.isArray(parsed.painPoints) ? parsed.painPoints : [];
-  return points
-    .filter((p) => p && typeof p.theme === "string" && Array.isArray(p.quotes))
-    .map((p) => ({
-      theme: String(p.theme).slice(0, 120),
-      summary: String(p.summary ?? "").slice(0, 400),
-      mentions: Number.isFinite(p.mentions) ? Math.max(0, Math.floor(p.mentions)) : 0,
-      confidence: (["high", "medium", "low"] as const).includes(p.confidence)
-        ? p.confidence
-        : "medium",
-      quotes: p.quotes.filter((q) => typeof q === "string").slice(0, 3).map((q) => q.slice(0, 300)),
-    }));
+}
+
+const STOPWORDS = new Set([
+  "a","an","the","is","are","was","were","and","or","but","this","that","these","those",
+  "it","its","for","of","to","in","on","at","by","with","as","be","been","being","have",
+  "has","had","do","does","did","not","no","yes","so","if","then","than","too","very",
+  "just","also","only","from","up","out","about","into","over","after","before",
+  "app","apps","good","nice","great","bad","please","money","use","using","used","time",
+  "times","really","much","many","some","any","all","every","one","two","get","got",
+  "make","made","would","could","should","will","can","cant","don","dont","doesn",
+  "you","your","yours","they","them","their","we","our","us","me","my","mine","he","she",
+  "his","her","him","hers","because","when","where","what","which","who","how","why",
+  "there","here","been","being","other","more","most","less","least","again","still",
+]);
+
+function extractKeywordsFromReviews(
+  reviews: { rating: number; text: string }[],
+  limit = 10,
+): string[] {
+  const counts = new Map<string, number>();
+  for (const r of reviews) {
+    const words = r.text.toLowerCase().match(/[a-z]{3,}/g) || [];
+    const seen = new Set<string>();
+    for (const w of words) {
+      if (STOPWORDS.has(w)) continue;
+      if (w.length < 4 && w !== "bug") continue;
+      if (seen.has(w)) continue;
+      seen.add(w);
+      counts.set(w, (counts.get(w) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([w]) => w);
+}
+
+function filterAndRankKeywords(raw: string[], fallback: string[]): string[] {
+  const cleaned: string[] = [];
+  const seen = new Set<string>();
+  for (const kRaw of raw) {
+    if (typeof kRaw !== "string") continue;
+    const k = kRaw.trim().toLowerCase();
+    if (!k) continue;
+    if (seen.has(k)) continue;
+    if (STOPWORDS.has(k)) continue;
+    if (k.length < 4 && k !== "bug") continue;
+    seen.add(k);
+    cleaned.push(k);
+  }
+  if (cleaned.length < 6) {
+    for (const f of fallback) {
+      if (cleaned.length >= 10) break;
+      if (!seen.has(f)) {
+        seen.add(f);
+        cleaned.push(f);
+      }
+    }
+  }
+  return cleaned.slice(0, 10);
+}
+
+function computeRatingDistribution(
+  reviews: { rating: number; text: string }[],
+): RatingDistribution {
+  const dist: RatingDistribution = { "5": 0, "4": 0, "3": 0, "2": 0, "1": 0 };
+  for (const r of reviews) {
+    const key = String(Math.max(1, Math.min(5, Math.round(r.rating)))) as keyof RatingDistribution;
+    if (r.rating >= 1 && r.rating <= 5) dist[key]++;
+  }
+  return dist;
 }
 
 export const analyzeReviews = createServerFn({ method: "POST" })
@@ -195,12 +303,11 @@ export const analyzeReviews = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<AnalysisResult> => {
     const packageId = extractPackageId(data.url);
     if (!packageId) {
-      throw new Error("Invalid Play Store URL. Expected a link like https://play.google.com/store/apps/details?id=com.example.app");
+      throw new Error("Please paste a valid Play Store app link.");
     }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    // Check cache (24h)
     const { data: cached } = await supabaseAdmin
       .from("review_analysis_cache")
       .select("*")
@@ -210,33 +317,74 @@ export const analyzeReviews = createServerFn({ method: "POST" })
     if (cached) {
       const age = Date.now() - new Date(cached.created_at as string).getTime();
       if (age < 24 * 60 * 60 * 1000) {
+        const result = cached.result as {
+          painPoints: PainPoint[];
+          ratingDistribution?: RatingDistribution;
+          topKeywords?: string[];
+          limitedReviews?: boolean;
+        };
         return {
           packageId,
           appTitle: cached.app_title as string | null,
           reviewsCount: cached.reviews_count as number,
-          painPoints: (cached.result as { painPoints: PainPoint[] }).painPoints,
+          painPoints: result.painPoints,
+          ratingDistribution:
+            result.ratingDistribution ?? { "5": 0, "4": 0, "3": 0, "2": 0, "1": 0 },
+          topKeywords: result.topKeywords ?? [],
+          limitedReviews: result.limitedReviews ?? (cached.reviews_count as number) < 30,
           cached: true,
           cachedAt: cached.created_at as string,
         };
       }
     }
 
-    const { appTitle, reviews } = await fetchPlayStoreReviews(packageId, 150);
-    if (reviews.length < 5) {
-      throw new Error(`Not enough reviews to analyze (found ${reviews.length}). Try a more popular app.`);
+    const { appTitle, reviews, appExists } = await fetchPlayStoreReviews(packageId, 150);
+    if (!appExists) {
+      throw new Error("We couldn't find this app on the Play Store. Double-check the link.");
+    }
+    if (reviews.length < 3) {
+      throw new Error(
+        `Not enough reviews to analyze (found ${reviews.length}). Try a more popular app.`,
+      );
     }
 
-    const painPoints = await clusterWithAI(reviews);
+    const llm = await clusterWithAI(reviews);
+
+    // Compute confidence server-side; drop themes with count < 3.
+    const painPoints: PainPoint[] = llm.themes
+      .filter((t) => t && typeof t.name === "string" && Array.isArray(t.quotes))
+      .map((t) => {
+        const mentions = Number.isFinite(t.count) ? Math.max(0, Math.floor(t.count)) : 0;
+        return {
+          theme: String(t.name).slice(0, 120),
+          summary: String(t.summary ?? "").slice(0, 400),
+          mentions,
+          percentage: reviews.length ? Math.round((mentions / reviews.length) * 100) : 0,
+          confidence: (mentions >= 10 ? "high" : "low") as "high" | "low",
+          quotes: t.quotes
+            .filter((q): q is string => typeof q === "string")
+            .slice(0, 3)
+            .map((q) => q.slice(0, 300)),
+        };
+      })
+      .filter((p) => p.mentions >= 3)
+      .sort((a, b) => b.mentions - a.mentions);
+
     if (painPoints.length === 0) {
       throw new Error("Could not extract pain points from these reviews.");
     }
+
+    const fallbackKeywords = extractKeywordsFromReviews(reviews, 10);
+    const topKeywords = filterAndRankKeywords(llm.top_keywords, fallbackKeywords);
+    const ratingDistribution = computeRatingDistribution(reviews);
+    const limitedReviews = reviews.length < 30;
 
     const now = new Date().toISOString();
     await supabaseAdmin.from("review_analysis_cache").upsert({
       package_id: packageId,
       app_title: appTitle,
       reviews_count: reviews.length,
-      result: { painPoints },
+      result: { painPoints, ratingDistribution, topKeywords, limitedReviews },
       created_at: now,
     });
 
@@ -245,6 +393,9 @@ export const analyzeReviews = createServerFn({ method: "POST" })
       appTitle,
       reviewsCount: reviews.length,
       painPoints,
+      ratingDistribution,
+      topKeywords,
+      limitedReviews,
       cached: false,
       cachedAt: now,
     };
