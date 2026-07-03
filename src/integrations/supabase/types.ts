@@ -14,7 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      review_analysis_cache: {
+        Row: {
+          app_title: string | null
+          created_at: string
+          package_id: string
+          result: Json
+          reviews_count: number
+        }
+        Insert: {
+          app_title?: string | null
+          created_at?: string
+          package_id: string
+          result: Json
+          reviews_count?: number
+        }
+        Update: {
+          app_title?: string | null
+          created_at?: string
+          package_id?: string
+          result?: Json
+          reviews_count?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
