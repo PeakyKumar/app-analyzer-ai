@@ -21,6 +21,8 @@ export type Database = {
           package_id: string
           result: Json
           reviews_count: number
+          geo_signal_counts: Json | null
+          geo_themes: Json | null
         }
         Insert: {
           app_title?: string | null
@@ -28,6 +30,8 @@ export type Database = {
           package_id: string
           result: Json
           reviews_count?: number
+          geo_signal_counts?: Json | null
+          geo_themes?: Json | null
         }
         Update: {
           app_title?: string | null
@@ -35,6 +39,32 @@ export type Database = {
           package_id?: string
           result?: Json
           reviews_count?: number
+          geo_signal_counts?: Json | null
+          geo_themes?: Json | null
+        }
+        Relationships: []
+      }
+      app_comparisons: {
+        Row: {
+          id: string
+          package_ids: string[]
+          app_titles: Json
+          created_at: string
+          result: Json
+        }
+        Insert: {
+          id?: string
+          package_ids: string[]
+          app_titles?: Json
+          created_at?: string
+          result: Json
+        }
+        Update: {
+          id?: string
+          package_ids?: string[]
+          app_titles?: Json
+          created_at?: string
+          result?: Json
         }
         Relationships: []
       }

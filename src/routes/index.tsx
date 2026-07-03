@@ -1,9 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Loader2, Search, Sparkles, Quote, Clock, RefreshCw, Info } from "lucide-react";
+import { CircleAlert as AlertCircle, Loader as Loader2, Search, Sparkles, Quote, Clock, RefreshCw, Info, GitCompare, MapPin } from "lucide-react";
 
 import { analyzeReviews, type AnalysisResult, type RatingDistribution } from "@/lib/analyze-reviews.functions";
+import { compareApps, type ComparisonResult } from "@/lib/compare-apps.functions";
+import { ComparisonReport, ComparisonLoading } from "@/components/comparison-report";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -88,27 +90,44 @@ const LOADING_STEPS = [
   "Almost done — polishing results…",
 ];
 
-function LoadingCard() {
+const COMPARISON_LOADING_STEPS = [
+  "Fetching reviews for all apps…",
+  "Analyzing geo-availability signals…",
+  "Clustering pain points per app…",
+  "Building comparison report…",
+  "Almost done — computing insights…",
+];
+
+function LoadingCard({ steps = LOADING_STEPS }: { steps?: string[] }) {
   const [step, setStep] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setStep((s) => (s + 1) % LOADING_STEPS.length), 3500);
+    const id = setInterval(() => setStep((s) => (s + 1) % steps.length), 3500);
     return () => clearInterval(id);
-  }, []);
+  }, [steps.length]);
   return (
     <div className="rounded-lg border border-border bg-card p-8 text-center text-sm text-muted-foreground">
       <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-primary" />
-      <div className="font-medium text-foreground">{LOADING_STEPS[step]}</div>
-      <div className="mt-1 text-xs">This usually takes 15–60 seconds.</div>
+      <div className="font-medium text-foreground">{steps[step]}</div>
+      <div className="mt-1 text-xs">This usually takes 30–90 seconds.</div>
     </div>
   );
 }
 
+const QUICK_COMMERCE_APPS = [
+  { label: "Blinkit", id: "com.grofersapp" },
+  { label: "Zepto", id: "com.zeptoconsumerapp" },
+  { label: "Swiggy Instamart", id: "in.swiggy" },
+];
+
 function Index() {
   const analyze = useServerFn(analyzeReviews);
+  const runCompare = useServerFn(compareApps);
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [comparisonResult, setComparisonResult] = useState<ComparisonResult | null>(null);
+  const [mode, setMode] = useState<"single" | "compare">("single");
 
   const valid = useMemo(() => isValidInput(url), [url]);
   const touched = url.length > 0;
@@ -118,12 +137,12 @@ function Index() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setComparisonResult(null);
     try {
       const res = await analyze({ data: { url: url.trim() } });
       setResult(res);
     } catch (err) {
       const raw = err instanceof Error ? err.message : "Analysis failed — please try again.";
-      // Normalize unknown/opaque errors
       const msg =
         raw.includes("Play Store request failed") ||
         raw.includes("Could not parse") ||
@@ -137,10 +156,45 @@ function Index() {
     }
   }
 
+  async function runComparison() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setComparisonResult(null);
+    try {
+      const packageIds = QUICK_COMMERCE_APPS.map((app) => app.id);
+      const res = await runCompare({ data: { packageIds, hypothesis: "geo_availability" } });
+      setComparisonResult(res);
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : "Comparison failed — please try again.";
+      const msg =
+        raw.includes("Play Store request failed") ||
+        raw.includes("Could not parse") ||
+        raw.startsWith("AI request failed")
+          ? "Comparison failed — please try again."
+          : raw;
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    await runAnalyze();
+    if (mode === "compare") {
+      await runComparison();
+    } else {
+      await runAnalyze();
+    }
   }
+
+  const handleModeToggle = (newMode: "single" | "compare") => {
+    setMode(newMode);
+    setError(null);
+    setResult(null);
+    setComparisonResult(null);
+  };
 
   return (
     <main className="min-h-screen bg-background">
@@ -154,48 +208,121 @@ function Index() {
             Review Pain-Point Copilot
           </h1>
           <p className="mt-3 max-w-xl text-base text-muted-foreground">
-            Paste any Google Play Store link. Get a ranked, evidence-backed breakdown of the app's
-            weaknesses in seconds.
+            {mode === "compare"
+              ? "Compare quick commerce apps by geo-availability gaps. See which apps have the most non-metro coverage complaints."
+              : "Paste any Google Play Store link. Get a ranked, evidence-backed breakdown of the app's weaknesses in seconds."}
           </p>
         </header>
 
-        <form onSubmit={onSubmit} className="mb-4">
-          <label htmlFor="playstore-url" className="sr-only">
-            Play Store URL
-          </label>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                id="playstore-url"
-                type="text"
-                autoComplete="off"
-                spellCheck={false}
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://play.google.com/store/apps/details?id=com.spotify.music"
-                className="h-12 w-full rounded-lg border border-input bg-card pr-4 pl-10 text-sm text-foreground shadow-sm outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
-                disabled={loading}
-              />
+        {/* Mode Toggle */}
+        <div className="mb-6 flex rounded-lg border border-border bg-muted/30 p-1">
+          <button
+            type="button"
+            onClick={() => handleModeToggle("single")}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${
+              mode === "single"
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Search className="mr-2 inline h-4 w-4" />
+            Single App
+          </button>
+          <button
+            type="button"
+            onClick={() => handleModeToggle("compare")}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${
+              mode === "compare"
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <GitCompare className="mr-2 inline h-4 w-4" />
+            Compare Apps
+          </button>
+        </div>
+
+        {mode === "single" && (
+          <form onSubmit={onSubmit} className="mb-4">
+            <label htmlFor="playstore-url" className="sr-only">
+              Play Store URL
+            </label>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  id="playstore-url"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://play.google.com/store/apps/details?id=com.spotify.music"
+                  className="h-12 w-full rounded-lg border border-input bg-card pr-4 pl-10 text-sm text-foreground shadow-sm outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  disabled={loading}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={!valid || loading}
+                className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-primary px-6 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Analyzing…
+                  </>
+                ) : (
+                  "Analyze reviews"
+                )}
+              </button>
             </div>
-            <button
-              type="submit"
-              disabled={!valid || loading}
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-primary px-6 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Analyzing…
-                </>
-              ) : (
-                "Analyze reviews"
-              )}
-            </button>
+            {touched && !valid && (
+              <p className="mt-2 text-xs text-destructive">Please paste a valid Play Store app link.</p>
+            )}
+          </form>
+        )}
+
+        {mode === "compare" && (
+          <div className="mb-6">
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-2">
+                <MapPin className="h-4 w-4 text-primary" />
+                Geo-Availability Comparison
+              </h3>
+              <p className="text-sm text-muted-foreground mb-3">
+                Compare Blinkit, Zepto, and Swiggy Instamart on availability-related pain points
+                from real user reviews.
+              </p>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {QUICK_COMMERCE_APPS.map((app) => (
+                  <span
+                    key={app.id}
+                    className="inline-flex items-center rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-foreground"
+                  >
+                    {app.label}
+                  </span>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={runComparison}
+                disabled={loading}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Comparing…
+                  </>
+                ) : (
+                  <>
+                    <GitCompare className="h-4 w-4" />
+                    Compare Quick Commerce Apps
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-          {touched && !valid && (
-            <p className="mt-2 text-xs text-destructive">Please paste a valid Play Store app link.</p>
-          )}
-        </form>
+        )}
 
         {error && !loading && (
           <div className="mb-6 flex items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
@@ -203,10 +330,10 @@ function Index() {
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>{error}</div>
             </div>
-            {error === "Analysis failed — please try again." && (
+            {(error === "Analysis failed — please try again." || error === "Comparison failed — please try again.") && (
               <button
                 type="button"
-                onClick={runAnalyze}
+                onClick={mode === "compare" ? runComparison : runAnalyze}
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-destructive/40 bg-background px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10"
               >
                 <RefreshCw className="h-3 w-3" /> Retry
@@ -215,9 +342,14 @@ function Index() {
           </div>
         )}
 
-        {loading && <LoadingCard />}
+        {loading && mode === "compare" && <ComparisonLoading />}
+        {loading && mode === "single" && <LoadingCard />}
 
-        {result && !loading && (
+        {mode === "compare" && comparisonResult && !loading && (
+          <ComparisonReport result={comparisonResult} />
+        )}
+
+        {mode === "single" && result && !loading && (
           <section aria-live="polite">
             <div className="mb-6 flex flex-wrap items-baseline justify-between gap-3 border-b border-border pb-4">
               <div>
@@ -310,7 +442,7 @@ function Index() {
           </section>
         )}
 
-        {!result && !loading && !error && (
+        {!result && !comparisonResult && !loading && !error && mode === "single" && (
           <div className="mt-8 rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
             <p className="font-medium text-foreground">Try an example:</p>
             <div className="mt-2 flex flex-wrap gap-2">
