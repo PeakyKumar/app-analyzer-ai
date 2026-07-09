@@ -154,8 +154,8 @@ type LlmResponse = { themes: LlmTheme[]; top_keywords: string[] };
 async function callClusteringLLM(
   reviews: { rating: number; text: string }[],
 ): Promise<LlmResponse> {
-  const apiKey = process.env.LOVABLE_API_KEY;
-  if (!apiKey) throw new Error("Missing LOVABLE_API_KEY");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Missing GEMINI_API_KEY");
 
   const negative = reviews
     .filter(
@@ -177,14 +177,14 @@ async function callClusteringLLM(
 2. Extract top_keywords: 8-12 meaningful, specific words/short phrases most frequent across reviews. EXCLUDE stopwords (a, the, is, and, this, that) and generic low-signal review words (app, good, nice, please, money, use, using, time). PREFER specific issue words (delay, support, chatbot, settlement, cashback, refund, crash, slow, bug). Skip words under 4 chars unless clearly meaningful like "bug".
 Return ONLY valid JSON: {"themes":[{"name":string,"count":number,"summary":string,"quotes":string[]}],"top_keywords":string[]}. Order themes by count desc. Return 4-8 themes.`;
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "google/gemini-3-flash-preview",
+      model: "gemini-3.1-flash-lite",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Reviews:\n${numbered}` },

@@ -155,8 +155,8 @@ async function callClusteringLLM(
   reviews: { rating: number; text: string }[],
   hypothesis: "geo_availability" | "general",
 ): Promise<LlmResponse> {
-  const apiKey = process.env.LOVABLE_API_KEY;
-  if (!apiKey) throw new Error("Missing LOVABLE_API_KEY");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Missing GEMINI_API_KEY");
 
   const negative = reviews
     .filter(
@@ -200,14 +200,14 @@ Return ONLY valid JSON: {"themes":[{"name":string,"count":number,"summary":strin
 Return ONLY valid JSON: {"themes":[{"name":string,"count":number,"summary":string,"quotes":string[]}],"top_keywords":string[]}. Order by count desc. Return 4-8 themes.`;
   }
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "google/gemini-3-flash-preview",
+      model: "gemini-3.1-flash-lite",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Reviews:\n${numbered}` },

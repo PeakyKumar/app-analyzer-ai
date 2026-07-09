@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useState } from "react";
-import { CircleAlert as AlertCircle, Loader as Loader2, Search, Sparkles, Quote, Clock, RefreshCw, Info, GitCompare, MapPin } from "lucide-react";
+import { CircleAlert as AlertCircle, Loader as Loader2, Search, Sparkles, Quote, Clock, RefreshCw, Info, GitCompare, MapPin, Plus, X } from "lucide-react";
 
 import { analyzeReviews, type AnalysisResult, type RatingDistribution } from "@/lib/analyze-reviews.functions";
 import { compareApps, type ComparisonResult } from "@/lib/compare-apps.functions";
@@ -18,6 +18,17 @@ function isValidInput(v: string): boolean {
   const t = v.trim();
   if (!t) return false;
   return PLAY_STORE_RE.test(t) || PACKAGE_RE.test(t);
+}
+
+function extractPackageId(input: string): string {
+  const trimmed = input.trim();
+  if (PACKAGE_RE.test(trimmed)) return trimmed;
+  try {
+    const u = new URL(trimmed);
+    return u.searchParams.get("id") || "";
+  } catch {
+    return "";
+  }
 }
 
 function timeAgo(iso: string): string {
@@ -113,16 +124,15 @@ function LoadingCard({ steps = LOADING_STEPS }: { steps?: string[] }) {
   );
 }
 
-const QUICK_COMMERCE_APPS = [
-  { label: "Blinkit", id: "com.grofersapp" },
-  { label: "Zepto", id: "com.zeptoconsumerapp" },
-  { label: "Swiggy Instamart", id: "in.swiggy" },
-];
-
 function Index() {
   const analyze = useServerFn(analyzeReviews);
   const runCompare = useServerFn(compareApps);
   const [url, setUrl] = useState("");
+  const [compareUrls, setCompareUrls] = useState<string[]>([
+    "https://play.google.com/store/apps/details?id=com.grofersapp",
+    "https://play.google.com/store/apps/details?id=com.zeptoconsumerapp",
+    "https://play.google.com/store/apps/details?id=com.swiggy.instamart",
+  ]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -131,6 +141,11 @@ function Index() {
 
   const valid = useMemo(() => isValidInput(url), [url]);
   const touched = url.length > 0;
+
+  const compareValid = useMemo(() => {
+    const validUrls = compareUrls.filter((u) => isValidInput(u));
+    return validUrls.length >= 2;
+  }, [compareUrls]);
 
   async function runAnalyze() {
     if (!valid || loading) return;
@@ -145,9 +160,9 @@ function Index() {
       const raw = err instanceof Error ? err.message : "Analysis failed — please try again.";
       const msg =
         raw.includes("Play Store request failed") ||
-        raw.includes("Could not parse") ||
-        raw.startsWith("AI request failed") ||
-        raw === "AI returned invalid JSON"
+          raw.includes("Could not parse") ||
+          raw.startsWith("AI request failed") ||
+          raw === "AI returned invalid JSON"
           ? "Analysis failed — please try again."
           : raw;
       setError(msg);
@@ -157,21 +172,27 @@ function Index() {
   }
 
   async function runComparison() {
-    if (loading) return;
+    if (loading || !compareValid) return;
     setLoading(true);
     setError(null);
     setResult(null);
     setComparisonResult(null);
     try {
-      const packageIds = QUICK_COMMERCE_APPS.map((app) => app.id);
+      const packageIds = compareUrls
+        .filter(isValidInput)
+        .map(extractPackageId)
+        .filter(Boolean);
+
+      if (packageIds.length < 2) throw new Error("Need at least 2 valid apps to compare.");
+
       const res = await runCompare({ data: { packageIds, hypothesis: "geo_availability" } });
       setComparisonResult(res);
     } catch (err) {
       const raw = err instanceof Error ? err.message : "Comparison failed — please try again.";
       const msg =
         raw.includes("Play Store request failed") ||
-        raw.includes("Could not parse") ||
-        raw.startsWith("AI request failed")
+          raw.includes("Could not parse") ||
+          raw.startsWith("AI request failed")
           ? "Comparison failed — please try again."
           : raw;
       setError(msg);
@@ -209,7 +230,7 @@ function Index() {
           </h1>
           <p className="mt-3 max-w-xl text-base text-muted-foreground">
             {mode === "compare"
-              ? "Compare quick commerce apps by geo-availability gaps. See which apps have the most non-metro coverage complaints."
+              ? "Compare any 2-4 apps by their evidence-backed pain points. See which ones have the most complaints."
               : "Paste any Google Play Store link. Get a ranked, evidence-backed breakdown of the app's weaknesses in seconds."}
           </p>
         </header>
@@ -219,11 +240,10 @@ function Index() {
           <button
             type="button"
             onClick={() => handleModeToggle("single")}
-            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${
-              mode === "single"
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${mode === "single"
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+              }`}
           >
             <Search className="mr-2 inline h-4 w-4" />
             Single App
@@ -231,11 +251,10 @@ function Index() {
           <button
             type="button"
             onClick={() => handleModeToggle("compare")}
-            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${
-              mode === "compare"
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${mode === "compare"
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+              }`}
           >
             <GitCompare className="mr-2 inline h-4 w-4" />
             Compare Apps
@@ -284,42 +303,88 @@ function Index() {
 
         {mode === "compare" && (
           <div className="mb-6">
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-5">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-2">
-                <MapPin className="h-4 w-4 text-primary" />
-                Geo-Availability Comparison
+                <GitCompare className="h-4 w-4 text-primary" />
+                Compare Multiple Apps
               </h3>
-              <p className="text-sm text-muted-foreground mb-3">
-                Compare Blinkit, Zepto, and Swiggy Instamart on availability-related pain points
-                from real user reviews.
+              <p className="text-sm text-muted-foreground mb-4">
+                Enter Play Store URLs to compare them head-to-head (2 to 4 apps).
               </p>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {QUICK_COMMERCE_APPS.map((app) => (
-                  <span
-                    key={app.id}
-                    className="inline-flex items-center rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-foreground"
-                  >
-                    {app.label}
-                  </span>
+
+              <div className="space-y-3 mb-4">
+                {compareUrls.map((val, idx) => (
+                  <div key={idx} className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="text"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={val}
+                        onChange={(e) => {
+                          const newUrls = [...compareUrls];
+                          newUrls[idx] = e.target.value;
+                          setCompareUrls(newUrls);
+                        }}
+                        placeholder="https://play.google.com/store/apps/details?id=com.example.app"
+                        className="h-10 w-full rounded-lg border border-input bg-card pr-4 pl-10 text-sm text-foreground shadow-sm outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                        disabled={loading}
+                      />
+                    </div>
+                    {compareUrls.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newUrls = [...compareUrls];
+                          newUrls.splice(idx, 1);
+                          setCompareUrls(newUrls);
+                        }}
+                        disabled={loading}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-input bg-card text-muted-foreground hover:bg-muted hover:text-foreground transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        aria-label="Remove app"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
-              <button
-                type="button"
-                onClick={runComparison}
-                disabled={loading}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Comparing…
-                  </>
-                ) : (
-                  <>
-                    <GitCompare className="h-4 w-4" />
-                    Compare Quick Commerce Apps
-                  </>
+
+              <div className="flex flex-wrap items-center gap-3">
+                {compareUrls.length < 4 && (
+                  <button
+                    type="button"
+                    onClick={() => setCompareUrls([...compareUrls, ""])}
+                    disabled={loading}
+                    className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/80 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add another app
+                  </button>
                 )}
-              </button>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={runComparison}
+                  disabled={!compareValid || loading}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Comparing…
+                    </>
+                  ) : (
+                    <>
+                      <GitCompare className="h-4 w-4" />
+                      Compare Apps
+                    </>
+                  )}
+                </button>
+              </div>
+              {!compareValid && compareUrls.some(u => u.length > 0 && !isValidInput(u)) && (
+                <p className="mt-3 text-xs text-destructive">Please ensure at least 2 entered links are valid Play Store URLs.</p>
+              )}
             </div>
           </div>
         )}
