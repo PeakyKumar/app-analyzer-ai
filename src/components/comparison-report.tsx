@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { TriangleAlert as AlertTriangle, Clock, Info, MapPin, Quote, TrendingUp, Users, Zap, ArrowRight } from "lucide-react";
+import { TriangleAlert as AlertTriangle, Clock, Info, Quote, TrendingUp, Zap, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ComparisonResult, AppAnalysisSummary } from "@/lib/compare-apps.functions";
 import type { GeoSignalCounts } from "@/lib/geo-signal-detector";
@@ -14,39 +14,41 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function GeoSignalMiniChart({ counts, total }: { counts: GeoSignalCounts; total: number }) {
+function GeoSignalMiniChart({ counts, total, isWorst }: { counts: GeoSignalCounts; total: number, isWorst?: boolean }) {
   const segments = [
-    { key: "metro" as const, label: "Metro signal", color: "#1978E5" },
-    { key: "non_metro_mentioned" as const, label: "Non-metro signal", color: "#F97316" },
-    { key: "unclear" as const, label: "Undetected", color: "#94A3B8" },
+    { key: "metro" as const, label: "Metro", classes: isWorst ? "bg-bg border-y-2 border-r-2 border-bg" : "bg-ink border-y-2 border-r-2 border-ink", style: {} },
+    { key: "non_metro_mentioned" as const, label: "Non-metro", classes: "bg-transparent border-y-2 border-r-2 border-current", style: {} },
+    { key: "unclear" as const, label: "Undetected", classes: "border-y-2 border-r-2 border-current", style: { backgroundImage: isWorst ? "repeating-linear-gradient(45deg, #FFF 0, #FFF 1px, transparent 0, transparent 4px)" : "repeating-linear-gradient(45deg, #000 0, #000 1px, transparent 0, transparent 4px)" } },
   ];
 
   return (
     <div className="space-y-2">
-      <div className="flex h-4 w-full overflow-hidden rounded-md bg-muted">
+      <div className="flex h-[14px] w-full border-l-2 border-current bg-transparent">
         {segments.map((seg) => {
           const pct = total > 0 ? (counts[seg.key] / total) * 100 : 0;
           return (
             <div
               key={seg.key}
-              className="h-full transition-all"
+              className={cn("h-full transition-all duration-200 ease-out", seg.classes)}
               style={{
                 width: `${pct}%`,
-                backgroundColor: seg.color,
                 minWidth: pct > 0 ? "4px" : "0",
+                ...seg.style
               }}
               title={`${seg.label}: ${counts[seg.key]} (${pct.toFixed(1)}%)`}
             />
           );
         })}
       </div>
-      <div className="flex flex-wrap gap-3 text-xs">
+      <div className="flex flex-wrap gap-3 text-[10px] font-mono font-bold uppercase text-current mt-2">
         {segments.map((seg) => (
-          <span key={seg.key} className="flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: seg.color }} />
-            <span className="text-muted-foreground">
-              {seg.key === "non_metro_mentioned" ? "Non-metro" : seg.key.charAt(0).toUpperCase() + seg.key.slice(1)}:{" "}
-              <span className="font-medium text-foreground">{counts[seg.key]}</span>
+          <span key={seg.key} className="flex items-center gap-1.5">
+            <span 
+              className={cn("h-3 w-3 border-2 border-current", seg.key === "metro" ? (isWorst ? "bg-bg" : "bg-ink") : "bg-transparent")} 
+              style={seg.style}
+            />
+            <span>
+              {seg.label}: {counts[seg.key]}
             </span>
           </span>
         ))}
@@ -71,59 +73,57 @@ function AppCard({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-5 transition",
-        isWorst && "border-destructive/30",
-        isBest && "border-success/30",
+        "brutalist-card rounded-none border-2 p-5",
+        isWorst ? "border-negative bg-negative text-bg" : "border-ink bg-bg text-ink"
       )}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold text-foreground">
+          <h3 className="font-display text-[14px] uppercase tracking-[0.02em]">
             {app.appTitle ?? app.packageId}
           </h3>
-          <p className="text-sm text-muted-foreground">
+          <p className="font-mono text-[11px] font-bold mt-1">
             {app.reviewsCount} reviews analyzed
           </p>
         </div>
         <div className="text-right">
           <div className={cn(
-            "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium",
-            isWorst && "bg-destructive/10 text-destructive",
-            isBest && "bg-success/10 text-success",
-            !isWorst && !isBest && "bg-muted text-muted-foreground",
+            "inline-flex items-center gap-1 border-2 px-2 py-0.5 font-mono text-[10px] font-bold uppercase rounded-none",
+            isWorst ? "border-bg bg-transparent text-bg" :
+            isBest ? "border-ink bg-ink text-bg" : "border-transparent text-transparent opacity-0 pointer-events-none"
           )}>
             {isWorst && <AlertTriangle className="h-3 w-3" />}
             {isBest && <Zap className="h-3 w-3" />}
-            {isWorst ? "Most availability complaints" : isBest ? "Fewest availability complaints" : ""}
+            {isWorst ? "Most complaints" : isBest ? "Fewest complaints" : "—"}
           </div>
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Availability-related mentions:</span>
-          <span className="font-medium text-foreground">{app.availabilityPercentage}%</span>
+      <div className="mt-4 space-y-3 font-mono text-xs uppercase font-bold">
+        <div className="flex items-center justify-between">
+          <span>Availability mentions:</span>
+          <span className="text-sm">{app.availabilityPercentage}%</span>
         </div>
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Non-metro signal:</span>
-          <span className="font-medium text-foreground">{nonMetroPct}%</span>
+        <div className="flex items-center justify-between">
+          <span>Non-metro signal:</span>
+          <span className="text-sm">{nonMetroPct}%</span>
         </div>
-        <div className="border-t border-border pt-3">
-          <p className="text-xs text-muted-foreground mb-2">Geo-signal distribution:</p>
-          <GeoSignalMiniChart counts={app.geoSignalCounts} total={app.reviewsCount} />
+        <div className="border-t-2 border-current pt-3">
+          <p className="text-[10px] mb-2">Geo-signal distribution:</p>
+          <GeoSignalMiniChart counts={app.geoSignalCounts} total={app.reviewsCount} isWorst={isWorst} />
         </div>
       </div>
 
       {app.geoThemes.length > 0 && (
-        <div className="mt-4 border-t border-border pt-4">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+        <div className="mt-4 border-t-2 border-current pt-4">
+          <h4 className="font-mono text-[10px] font-bold uppercase tracking-wide mb-2">
             Top geo-availability themes
           </h4>
           <ul className="space-y-2">
             {app.geoThemes.slice(0, 3).map((theme, i) => (
-              <li key={i} className="text-sm">
-                <span className="font-medium text-foreground">{theme.theme}</span>
-                <span className="text-muted-foreground"> — {theme.mentions} mentions</span>
+              <li key={i} className="text-[11px] font-mono">
+                <span className="font-bold">{theme.theme}</span>
+                <span> — {theme.mentions} mentions</span>
               </li>
             ))}
           </ul>
@@ -143,15 +143,15 @@ function ComparisonInsights({ result }: { result: ComparisonResult }) {
   if (allInsights.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
-      <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
-        <TrendingUp className="h-4 w-4 text-primary" />
+    <div className="brutalist-card rounded-none border-2 border-ink bg-bg p-4">
+      <h4 className="flex items-center gap-2 font-display text-[14px] uppercase text-ink mb-3">
+        <TrendingUp className="h-4 w-4" />
         Key Insights
       </h4>
       <ul className="space-y-2">
         {allInsights.map((insight, i) => (
-          <li key={i} className="text-sm text-foreground flex items-start gap-2">
-            <ArrowRight className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
+          <li key={i} className="text-sm font-medium text-ink flex items-start gap-2">
+            <ArrowRight className="h-4 w-4 mt-0.5 shrink-0" />
             <span>{insight}</span>
           </li>
         ))}
@@ -169,15 +169,15 @@ function LimitationsCard() {
   ];
 
   return (
-    <div className="rounded-lg border border-border bg-muted/50 p-4">
-      <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
-        <Info className="h-4 w-4 text-muted-foreground" />
+    <div className="brutalist-card rounded-none border-2 border-ink bg-bg p-4">
+      <h4 className="flex items-center gap-2 font-display text-[14px] uppercase text-ink mb-3">
+        <Info className="h-4 w-4" />
         Limitations
       </h4>
       <ul className="space-y-2">
         {limitations.map((lim, i) => (
-          <li key={i} className="text-xs text-muted-foreground flex items-start gap-2">
-            <span className="text-muted-foreground/50">•</span>
+          <li key={i} className="text-[11px] font-mono font-bold uppercase text-ink flex items-start gap-2">
+            <span className="">•</span>
             <span>{lim}</span>
           </li>
         ))}
@@ -193,18 +193,18 @@ function ThemeComparisonTable({ result }: { result: ComparisonResult }) {
   if (themeNames.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-border bg-card overflow-hidden">
-      <div className="border-b border-border px-4 py-3">
-        <h4 className="text-sm font-semibold text-foreground">Theme Comparison</h4>
-        <p className="text-xs text-muted-foreground">Pain points across apps, normalized by review count</p>
+    <div className="brutalist-card rounded-none border-2 border-ink bg-bg">
+      <div className="border-b-2 border-ink px-4 py-3">
+        <h4 className="font-display text-[14px] uppercase text-ink">Theme Comparison</h4>
+        <p className="font-mono text-[10px] font-bold uppercase text-ink mt-1">Pain points across apps, normalized by review count</p>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="w-full overflow-x-auto">
+        <table className="w-full text-sm min-w-[600px]">
           <thead>
-            <tr className="border-b border-border bg-muted/30">
-              <th className="px-4 py-2 text-left font-medium text-muted-foreground">Theme</th>
+            <tr className="border-b-2 border-ink bg-ink text-bg">
+              <th className="px-4 py-2 text-left font-mono text-[11px] font-bold uppercase">Theme</th>
               {apps.map((app) => (
-                <th key={app.packageId} className="px-4 py-2 text-right font-medium text-muted-foreground">
+                <th key={app.packageId} className="px-4 py-2 text-right font-mono text-[11px] font-bold uppercase">
                   {app.appTitle ?? app.packageId}
                 </th>
               ))}
@@ -212,21 +212,19 @@ function ThemeComparisonTable({ result }: { result: ComparisonResult }) {
           </thead>
           <tbody>
             {themeNames.map((themeName) => (
-              <tr key={themeName} className="border-b border-border last:border-0">
-                <td className="px-4 py-2 text-foreground">{themeName}</td>
+              <tr key={themeName} className="border-b-2 border-ink last:border-0 hover:bg-ink hover:text-bg transition-colors duration-200">
+                <td className="px-4 py-2 font-bold uppercase text-[11px] font-mono">{themeName}</td>
                 {apps.map((app) => {
                   const themeData = themeComparison.themes.find(
                     (t) => t.name === themeName && t.apps.some((a) => a.packageId === app.packageId),
                   );
                   const appTheme = themeData?.apps.find((a) => a.packageId === app.packageId);
                   return (
-                    <td key={app.packageId} className="px-4 py-2 text-right">
+                    <td key={app.packageId} className="px-4 py-2 text-right font-mono text-[11px] font-bold uppercase">
                       {appTheme ? (
-                        <span className="font-medium text-foreground">
-                          {appTheme.percentage}%
-                        </span>
+                        <span>{appTheme.percentage}%</span>
                       ) : (
-                        <span className="text-muted-foreground/50">—</span>
+                        <span>—</span>
                       )}
                     </td>
                   );
@@ -254,16 +252,16 @@ function QuotesSection({ apps }: { apps: AppAnalysisSummary[] }) {
   if (allQuotes.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
-        <Quote className="h-4 w-4 text-muted-foreground" />
+    <div className="brutalist-card rounded-none border-2 border-ink bg-bg p-4">
+      <h4 className="flex items-center gap-2 font-display text-[14px] uppercase text-ink mb-3">
+        <Quote className="h-4 w-4" />
         Sample User Quotes
       </h4>
       <ul className="space-y-3">
         {allQuotes.slice(0, 8).map((item, i) => (
-          <li key={i} className="rounded-md bg-muted/50 px-3 py-2">
-            <p className="text-sm text-foreground italic">"{item.quote}"</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+          <li key={i} className="rounded-none border-2 border-ink bg-bg px-3 py-2">
+            <p className="font-mono text-[11px] text-ink uppercase">"{item.quote}"</p>
+            <p className="mt-1 font-mono text-[10px] font-bold uppercase text-ink">
               — {item.app}, {item.theme}
             </p>
           </li>
@@ -283,7 +281,7 @@ export function ComparisonReport({ result }: { result: ComparisonResult }) {
 
   const headline = useMemo(() => {
     if (worstApp && gap >= 5) {
-      return `${worstApp.appTitle ?? worstApp.packageId} leads in availability-related complaints`;
+      return `${worstApp.appTitle ?? worstApp.packageId} leads in availability complaints`;
     }
     return "Quick Commerce Availability Comparison";
   }, [worstApp, gap]);
@@ -296,13 +294,13 @@ export function ComparisonReport({ result }: { result: ComparisonResult }) {
   return (
     <section className="space-y-6">
       {/* Header */}
-      <div className="border-b border-border pb-4">
+      <div className="border-b-2 border-ink pb-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-semibold text-foreground">{headline}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{subheadline}</p>
+            <h2 className="font-display text-2xl uppercase tracking-[0.02em] text-ink">{headline}</h2>
+            <p className="mt-1 font-mono text-sm text-ink">{subheadline}</p>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase text-ink">
             <Clock className="h-3.5 w-3.5" />
             {timeAgo(result.comparisonDate)}
           </div>
@@ -312,9 +310,9 @@ export function ComparisonReport({ result }: { result: ComparisonResult }) {
           {apps.map((app) => (
             <span
               key={app.packageId}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs"
+              className="inline-flex items-center gap-1.5 border-2 border-ink bg-bg px-2.5 py-1 font-mono text-[10px] font-bold uppercase text-ink rounded-none"
             >
-              {app.cached && <Clock className="h-3 w-3 text-muted-foreground" />}
+              {app.cached && <Clock className="h-3 w-3 text-ink" />}
               {app.appTitle ?? app.packageId}
             </span>
           ))}
@@ -351,20 +349,14 @@ export function ComparisonReport({ result }: { result: ComparisonResult }) {
 export function ComparisonLoading() {
   return (
     <div className="space-y-6">
-      <div className="animate-pulse">
-        <div className="h-8 w-2/3 rounded bg-muted" />
-        <div className="mt-2 h-4 w-1/2 rounded bg-muted" />
+      <div className="brutalist-card border-2 border-ink bg-bg p-6 text-center">
+        <div className="mx-auto mb-4 h-6 w-6 border-2 border-ink bg-ink animate-[spin_1s_steps(4)_infinite]" />
+        <div className="font-mono text-sm uppercase text-ink font-bold">Comparing apps...</div>
+        <div className="mt-2 font-mono text-[11px] text-ink uppercase">This usually takes 30–90 seconds.</div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="rounded-lg border border-border bg-card p-5 animate-pulse">
-            <div className="h-5 w-1/2 rounded bg-muted" />
-            <div className="mt-2 h-4 w-1/3 rounded bg-muted" />
-            <div className="mt-4 space-y-2">
-              <div className="h-3 w-full rounded bg-muted" />
-              <div className="h-3 w-3/4 rounded bg-muted" />
-            </div>
-          </div>
+          <div key={i} className="brutalist-card rounded-none border-2 border-ink bg-bg p-5 h-48 opacity-20" />
         ))}
       </div>
     </div>
